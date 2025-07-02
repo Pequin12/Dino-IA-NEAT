@@ -1,0 +1,520 @@
+import pygame
+import neat
+import os
+import random
+import math
+
+# Initialize Pygame
+pygame.init()
+
+# Constants
+SCREEN_WIDTH = 1200
+SCREEN_HEIGHT = 600
+GROUND_HEIGHT = 500
+DINO_SIZE = 30
+OBSTACLE_WIDTH = 20
+GAME_SPEED = 5
+OBSTACLE_SPAWN_RATE = 100  # frames between obstacles
+
+# Colors
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+RED = (255, 0, 0)
+GREEN = (0, 255, 0)
+BLUE = (0, 0, 255)
+GRAY = (128, 128, 128)
+DARK_GRAY = (64, 64, 64)
+PURPLE = (128, 0, 128)
+ORANGE = (255, 165, 0)
+
+class Dino:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.width = DINO_SIZE
+        self.height = DINO_SIZE
+        self.vel_y = 0
+        self.jump_vel = -12
+        self.gravity = 0.8
+        self.on_ground = True
+        self.alive = True
+        self.score = 0
+        self.time_alive = 0
+        
+    def jump(self):
+        if self.on_ground:
+            self.vel_y = self.jump_vel
+            self.on_ground = False
+    
+    def update(self):
+        if not self.alive:
+            return
+            
+        self.vel_y += self.gravity
+        self.y += self.vel_y
+        
+        # Ground collision
+        if self.y >= GROUND_HEIGHT - self.height:
+            self.y = GROUND_HEIGHT - self.height
+            self.vel_y = 0
+            self.on_ground = True
+        
+        # Score is based on time survived
+        self.time_alive += 1
+        self.score = self.time_alive
+    
+    def get_rect(self):
+        return pygame.Rect(self.x, self.y, self.width, self.height)
+    
+    def draw(self, screen, color=GREEN):
+        if self.alive:
+            pygame.draw.rect(screen, color, self.get_rect())
+
+class Obstacle:
+    def __init__(self, x, obstacle_type="normal"):
+        self.x = x
+        self.type = obstacle_type
+        
+        if obstacle_type == "normal":
+            self.width = OBSTACLE_WIDTH
+            self.height = 40
+            self.y = GROUND_HEIGHT - self.height
+            self.color = RED
+        elif obstacle_type == "tall":
+            self.width = OBSTACLE_WIDTH
+            self.height = 60
+            self.y = GROUND_HEIGHT - self.height  
+            self.color = PURPLE
+        elif obstacle_type == "flying":
+            self.width = OBSTACLE_WIDTH + 10
+            self.height = 25
+            self.y = GROUND_HEIGHT - 80  # Flying obstacle
+            self.color = ORANGE
+        elif obstacle_type == "double":
+            self.width = OBSTACLE_WIDTH
+            self.height = 35
+            self.y = GROUND_HEIGHT - self.height
+            self.color = (139, 0, 0)  # Dark red
+            self.has_top = True
+            self.top_height = 30
+            self.gap = 100
+        
+    def update(self):
+        self.x -= GAME_SPEED
+        
+    def get_rects(self):
+        rects = [pygame.Rect(self.x, self.y, self.width, self.height)]
+        if self.type == "double":
+            # Add top obstacle with gap
+            top_rect = pygame.Rect(self.x, self.y - self.gap - self.top_height, 
+                                 self.width, self.top_height)
+            rects.append(top_rect)
+        return rects
+    
+    def draw(self, screen):
+        for rect in self.get_rects():
+            pygame.draw.rect(screen, self.color, rect)
+
+class DinoGame:
+    def __init__(self):
+        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        pygame.display.set_caption("NEAT AI Dino Game")
+        self.clock = pygame.time.Clock()
+        self.obstacles = []
+        self.obstacle_timer = 0
+        self.generation = 0
+        self.best_fitness = 0
+        self.best_genome = None
+        self.game_time = 0
+        
+    def spawn_obstacle(self):
+        # Randomly choose obstacle type
+        obstacle_types = ["normal", "tall", "flying", "double"]
+        weights = [0.4, 0.3, 0.2, 0.1]  # Normal is most common, double is rare
+        obstacle_type = random.choices(obstacle_types, weights=weights)[0]
+        
+        self.obstacles.append(Obstacle(SCREEN_WIDTH, obstacle_type))
+        
+    def update_obstacles(self):
+        self.obstacle_timer += 1
+        self.game_time += 1
+        
+        # Increase difficulty over time by spawning obstacles more frequently
+        spawn_rate = max(60, OBSTACLE_SPAWN_RATE - (self.game_time // 300))
+        
+        if self.obstacle_timer >= spawn_rate:
+            self.spawn_obstacle()
+            self.obstacle_timer = 0
+            
+        # Update and remove off-screen obstacles
+        self.obstacles = [obs for obs in self.obstacles if obs.x > -50]
+        for obstacle in self.obstacles:
+            obstacle.update()
+    
+    def check_collision(self, dino):
+        dino_rect = dino.get_rect()
+        for obstacle in self.obstacles:
+            for obs_rect in obstacle.get_rects():
+                if dino_rect.colliderect(obs_rect):
+                    return True
+        return False
+    
+    def get_obstacle_info(self, dino):
+        # Get info about next 2 obstacles for better AI decision making
+        upcoming_obstacles = []
+        
+        for obstacle in self.obstacles:
+            if obstacle.x > dino.x:
+                upcoming_obstacles.append(obstacle)
+        
+        # Sort by distance
+        upcoming_obstacles.sort(key=lambda obs: obs.x - dino.x)
+        
+        if len(upcoming_obstacles) == 0:
+            return [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]  # No obstacles
+        
+        # First obstacle info
+        obs1 = upcoming_obstacles[0]
+        distance1 = (obs1.x - dino.x) / SCREEN_WIDTH
+        height1 = (GROUND_HEIGHT - obs1.y) / SCREEN_HEIGHT
+        type1 = {"normal": 0, "tall": 0.33, "flying": 0.66, "double": 1.0}[obs1.type]
+        
+        # Second obstacle info (if exists)
+        if len(upcoming_obstacles) > 1:
+            obs2 = upcoming_obstacles[1]
+            distance2 = (obs2.x - dino.x) / SCREEN_WIDTH
+            height2 = (GROUND_HEIGHT - obs2.y) / SCREEN_HEIGHT
+            type2 = {"normal": 0, "tall": 0.33, "flying": 0.66, "double": 1.0}[obs2.type]
+        else:
+            distance2, height2, type2 = 1.0, 0.0, 0.0
+        
+        return [distance1, height1, type1, distance2, height2, type2]
+    
+    def draw_neural_network(self, genome, config):
+        if not genome:
+            return
+            
+        # Neural network visualization area
+        nn_x = SCREEN_WIDTH - 300
+        nn_y = 10
+        nn_width = 290
+        nn_height = 250
+        
+        # Draw background
+        pygame.draw.rect(self.screen, WHITE, (nn_x, nn_y, nn_width, nn_height))
+        pygame.draw.rect(self.screen, BLACK, (nn_x, nn_y, nn_width, nn_height), 2)
+        
+        # Draw title
+        font = pygame.font.Font(None, 20)
+        title = font.render("Best Neural Network", True, BLACK)
+        self.screen.blit(title, (nn_x + 5, nn_y + 5))
+        
+        # Draw fitness and network info
+        fitness_text = font.render(f"Fitness: {int(self.best_fitness)}", True, BLACK)
+        self.screen.blit(fitness_text, (nn_x + 5, nn_y + 25))
+        
+        # Count nodes and connections
+        num_hidden = len([n for n in genome.nodes.keys() if n not in config.genome_config.input_keys and n != config.genome_config.output_keys[0]])
+        num_connections = len([c for c in genome.connections.values() if c.enabled])
+        
+        nodes_text = font.render(f"Hidden Nodes: {num_hidden}", True, BLACK)
+        conn_text = font.render(f"Connections: {num_connections}", True, BLACK)
+        self.screen.blit(nodes_text, (nn_x + 5, nn_y + 45))
+        self.screen.blit(conn_text, (nn_x + 5, nn_y + 65))
+        
+        # Draw actual network structure
+        try:
+            # Get all nodes
+            input_nodes = config.genome_config.input_keys
+            output_nodes = config.genome_config.output_keys
+            hidden_nodes = [n for n in genome.nodes.keys() 
+                          if n not in input_nodes and n not in output_nodes]
+            
+            # Position nodes
+            start_y = nn_y + 90
+            node_positions = {}
+            
+            # Input nodes (left side)
+            for i, node_id in enumerate(input_nodes):
+                node_positions[node_id] = (nn_x + 30, start_y + i * 25)
+            
+            # Output nodes (right side)  
+            for i, node_id in enumerate(output_nodes):
+                node_positions[node_id] = (nn_x + nn_width - 30, start_y + 75)
+            
+            # Hidden nodes (middle)
+            if hidden_nodes:
+                for i, node_id in enumerate(hidden_nodes):
+                    x_pos = nn_x + 80 + (i % 3) * 40
+                    y_pos = start_y + 25 + (i // 3) * 25
+                    node_positions[node_id] = (x_pos, y_pos)
+            
+            # Draw connections
+            for conn_key, connection in genome.connections.items():
+                if connection.enabled and conn_key[0] in node_positions and conn_key[1] in node_positions:
+                    start_pos = node_positions[conn_key[0]]
+                    end_pos = node_positions[conn_key[1]]
+                    
+                    # Color based on connection weight
+                    weight = connection.weight
+                    if weight > 0:
+                        color = (0, min(255, int(abs(weight) * 50)), 0)  # Green for positive
+                    else:
+                        color = (min(255, int(abs(weight) * 50)), 0, 0)  # Red for negative
+                    
+                    thickness = max(1, min(3, int(abs(weight))))
+                    pygame.draw.line(self.screen, color, start_pos, end_pos, thickness)
+            
+            # Draw nodes
+            for node_id, pos in node_positions.items():
+                if node_id in input_nodes:
+                    color = BLUE
+                    size = 6
+                elif node_id in output_nodes:
+                    color = GREEN
+                    size = 8
+                else:
+                    color = GRAY
+                    size = 5
+                
+                pygame.draw.circle(self.screen, color, pos, size)
+                
+                # Draw node labels
+                label_font = pygame.font.Font(None, 16)
+                if node_id in input_nodes:
+                    labels = ["Dist1", "H1", "Type1", "Dist2", "H2", "Type2", "VelY"]
+                    if node_id < len(labels):
+                        label = label_font.render(labels[node_id], True, BLACK)
+                        self.screen.blit(label, (pos[0] - 15, pos[1] - 20))
+                elif node_id in output_nodes:
+                    label = label_font.render("Jump", True, BLACK)
+                    self.screen.blit(label, (pos[0] - 10, pos[1] - 20))
+                    
+        except Exception as e:
+            # Fallback simple visualization if genome structure is complex
+            error_text = font.render("Complex Network", True, BLACK)
+            self.screen.blit(error_text, (nn_x + 5, nn_y + 90))
+    
+    def run_generation(self, genomes, config):
+        self.generation += 1
+        dinos = []
+        nets = []
+        ge = []
+        
+        # Create dinos and networks for each genome
+        for genome_id, genome in genomes:
+            dinos.append(Dino(100, GROUND_HEIGHT - DINO_SIZE))
+            nets.append(neat.nn.FeedForwardNetwork.create(genome, config))
+            ge.append(genome)
+            genome.fitness = 0
+        
+        # Reset game state
+        self.obstacles = []
+        self.obstacle_timer = 0
+        self.game_time = 0
+        
+        running = True
+        while running and len(dinos) > 0:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                    pygame.quit()
+                    return
+            
+            # Update obstacles
+            self.update_obstacles()
+            
+            # Update dinos and get AI decisions
+            for i, dino in enumerate(dinos):
+                if not dino.alive:
+                    continue
+                    
+                dino.update()
+                
+                # Get inputs for neural network (more complex now)
+                obstacle_info = self.get_obstacle_info(dino)
+                dino_vel = dino.vel_y / 15  # Normalized velocity
+                
+                inputs = obstacle_info + [dino_vel]  # 7 inputs total
+                
+                # Get AI decision
+                try:
+                    output = nets[i].activate(inputs)
+                    if output[0] > 0.5:  # Jump threshold
+                        dino.jump()
+                except:
+                    pass  # Handle any network errors
+                
+                # Check collision
+                if self.check_collision(dino):
+                    dino.alive = False
+                    # Final fitness is time survived
+                    ge[i].fitness = dino.score
+                    
+                    # Update best fitness and genome
+                    if dino.score > self.best_fitness:
+                        self.best_fitness = dino.score
+                        self.best_genome = ge[i]
+                
+                # Continuous fitness update for living dinos
+                ge[i].fitness = dino.score
+            
+            # Remove dead dinos
+            alive_dinos = []
+            alive_nets = []
+            alive_ge = []
+            
+            for i, dino in enumerate(dinos):
+                if dino.alive:
+                    alive_dinos.append(dino)
+                    alive_nets.append(nets[i])
+                    alive_ge.append(ge[i])
+            
+            dinos = alive_dinos
+            nets = alive_nets
+            ge = alive_ge
+            
+            # Draw everything
+            self.screen.fill(WHITE)
+            
+            # Draw ground
+            pygame.draw.line(self.screen, BLACK, (0, GROUND_HEIGHT), (SCREEN_WIDTH, GROUND_HEIGHT), 2)
+            
+            # Draw obstacles
+            for obstacle in self.obstacles:
+                obstacle.draw(self.screen)
+            
+            # Draw dinos with different colors based on performance
+            if dinos:
+                best_score = max(dino.score for dino in dinos)
+                for dino in dinos:
+                    if dino.score == best_score:
+                        dino.draw(self.screen, (255, 215, 0))  # Gold for best
+                    else:
+                        dino.draw(self.screen, GREEN)
+            
+            # Draw info
+            font = pygame.font.Font(None, 36)
+            gen_text = font.render(f"Generation: {self.generation}", True, BLACK)
+            alive_text = font.render(f"Alive: {len(dinos)}", True, BLACK)
+            best_text = font.render(f"Best Score: {int(self.best_fitness)}", True, BLACK)
+            time_text = font.render(f"Game Time: {self.game_time}", True, BLACK)
+            
+            self.screen.blit(gen_text, (10, 10))
+            self.screen.blit(alive_text, (10, 50))
+            self.screen.blit(best_text, (10, 90))
+            self.screen.blit(time_text, (10, 130))
+            
+            # Draw neural network
+            self.draw_neural_network(self.best_genome, config)
+            
+            pygame.display.flip()
+            self.clock.tick(60)
+
+def run_neat(config_path):
+    config = neat.config.Config(neat.DefaultGenome, neat.DefaultReproduction,
+                               neat.DefaultSpeciesSet, neat.DefaultStagnation,
+                               config_path)
+    
+    population = neat.Population(config)
+    population.add_reporter(neat.StdOutReporter(True))
+    stats = neat.StatisticsReporter()
+    population.add_reporter(stats)
+    
+    game = DinoGame()
+    
+    # Run for many generations
+    winner = population.run(game.run_generation, 100)
+    
+    pygame.quit()
+
+if __name__ == "__main__":
+    # Create config file content with proper NEAT settings
+    config_content = """
+[NEAT]
+fitness_criterion     = max
+fitness_threshold     = 2000
+pop_size              = 50
+reset_on_extinction   = False
+
+[DefaultGenome]
+# node activation options
+activation_default      = tanh
+activation_mutate_rate  = 0.1
+activation_options      = tanh sigmoid relu
+
+# node aggregation options
+aggregation_default     = sum
+aggregation_mutate_rate = 0.1
+aggregation_options     = sum
+
+# node bias options
+bias_init_mean          = 0.0
+bias_init_stdev         = 1.0
+bias_max_value          = 30.0
+bias_min_value          = -30.0
+bias_mutate_power       = 0.5
+bias_mutate_rate        = 0.7
+bias_replace_rate       = 0.1
+
+# genome compatibility options
+compatibility_disjoint_coefficient = 1.0
+compatibility_weight_coefficient   = 0.5
+
+# connection add/remove rates
+conn_add_prob           = 0.5
+conn_delete_prob        = 0.5
+
+# connection enable options
+enabled_default         = True
+enabled_mutate_rate     = 0.01
+
+feed_forward            = True
+initial_connection      = unconnected
+
+# node add/remove rates
+node_add_prob           = 0.2
+node_delete_prob        = 0.2
+
+# network parameters
+num_hidden              = 0
+num_inputs              = 7
+num_outputs             = 1
+
+# node response options
+response_init_mean      = 1.0
+response_init_stdev     = 0.0
+response_max_value      = 30.0
+response_min_value      = -30.0
+response_mutate_power   = 0.0
+response_mutate_rate    = 0.0
+response_replace_rate   = 0.0
+
+# connection weight options
+weight_init_mean        = 0.0
+weight_init_stdev       = 1.0
+weight_max_value        = 30
+weight_min_value        = -30
+weight_mutate_power     = 0.5
+weight_mutate_rate      = 0.8
+weight_replace_rate     = 0.1
+
+[DefaultSpeciesSet]
+compatibility_threshold = 3.0
+
+[DefaultStagnation]
+species_fitness_func = max
+max_stagnation       = 20
+species_elitism      = 2
+
+[DefaultReproduction]
+elitism            = 2
+survival_threshold = 0.2
+"""
+    
+    # Save config file
+    with open('config.txt', 'w') as f:
+        f.write(config_content)
+    
+    # Run the game
+    run_neat('config.txt')
