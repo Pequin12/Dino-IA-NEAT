@@ -48,7 +48,7 @@ DEFAULT_NEAT_CONFIG = """
 
 [NEAT]
 fitness_criterion     = max
-fitness_threshold     = 2000
+fitness_threshold     = 20000
 pop_size              = 300
 reset_on_extinction   = False
 
@@ -447,8 +447,8 @@ def run(config_file):
 
     wrapped_eval.generation = 0
 
-    # run for up to 50 generations
-    winner = p.run(wrapped_eval, 50)
+    # run for up to 5000 generations
+    winner = p.run(wrapped_eval, 5000)
 
     # save winner
     with open('winner.pkl', 'wb') as f:
