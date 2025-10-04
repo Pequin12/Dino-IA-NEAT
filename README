@@ -1,0 +1,3 @@
+Aquest arxiu programacio IA es un sol codi que al executarlo, directament s'entrenara una IA amb una població de 3000 i l'algoritme NEAT
+S'obrira una pestanya que mostra els 3000 agents jugant com a cuadrats per temes d'optimitzacio.
+També es mostra una visualització del millor cervell actual.
