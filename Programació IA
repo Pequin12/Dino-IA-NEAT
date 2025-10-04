@@ -49,7 +49,7 @@ DEFAULT_NEAT_CONFIG = """
 [NEAT]
 fitness_criterion     = max
 fitness_threshold     = 20000
-pop_size              = 300
+pop_size              = 3000
 reset_on_extinction   = False
 
 [DefaultGenome]
@@ -246,7 +246,7 @@ def draw_network(surface, genome, config, topleft=(580, 10), size=(210, 140)):
 
     # border
     pygame.draw.rect(surface, (150, 150, 150), (x0, y0, w, h), 1)
-    label = font.render('Current best network', True, (220, 220, 220))
+    label = font.render('Millor IA actual', True, (220, 220, 220))
     surface.blit(label, (x0 + 6, y0 + 4))
 
 
